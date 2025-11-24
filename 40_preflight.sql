@@ -54,4 +54,4 @@ IF v_missing <> '' THEN RAISE EXCEPTION 'Preflight failed; missing:%',
 v_missing;
 END IF;
 END;
-$$;
+$$ LANGUAGE plpgsql;

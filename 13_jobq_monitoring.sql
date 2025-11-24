@@ -64,7 +64,7 @@ SELECT COUNT(*) FILTER (
     WHERE status = 'pending'
   ) AS avg_pending_wait
 FROM jobq.jobs;
-CREATE OR REPLACE FUNCTION jobq.get_queue_metrics() RETURNS jobq.queue_metrics LANGUAGE sql AS $$
+CREATE OR REPLACE FUNCTION jobq.get_queue_metrics() RETURNS jobq.queue_metrics LANGUAGE sql STABLE AS $$
 SELECT pending,
   running,
   succeeded,
