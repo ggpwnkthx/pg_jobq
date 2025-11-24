@@ -429,8 +429,6 @@ The repository includes Mermaid diagrams you can render in your docs tooling or 
 - `architecture.mmd` – high‑level topology: app / jobq / pg_cron / Azure Storage
 - `lifecycle.mmd` – worker & job lifecycle (enqueue → claim → run → succeed/fail/requeue/kill)
 
-Many Markdown renderers (including GitHub) can show these when configured with Mermaid support.
-
 ---
 
 ## Upgrades / Migrations
@@ -448,7 +446,7 @@ Recommended pattern:
 
 ---
 
-## Getting Help
+## Troubleshooting
 
 If something fails during install or test:
 
