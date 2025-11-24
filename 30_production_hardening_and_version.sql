@@ -90,7 +90,7 @@ CREATE TABLE IF NOT EXISTS jobq.schema_version (
   installed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   installed_by TEXT NOT NULL DEFAULT session_user
 );
-CREATE OR REPLACE FUNCTION jobq.version() RETURNS TEXT LANGUAGE sql AS $$
+CREATE OR REPLACE FUNCTION jobq.version() RETURNS TEXT LANGUAGE sql STABLE AS $$
 SELECT max(version)
 FROM jobq.schema_version;
 $$;
