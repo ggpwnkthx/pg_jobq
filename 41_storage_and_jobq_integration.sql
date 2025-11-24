@@ -1,37 +1,86 @@
 \set ON_ERROR_STOP on
 
 /*
-  44_enqueue_job.sql
+  41_storage_and_jobq_integration.sql
 
   Purpose:
-    - Integration test that:
-        * jobq.enqueue() can insert a job row.
-        * jobq.run_next_job() can execute the job.
-        * result_blob_path is populated.
-        * The referenced blob actually exists in Azure Storage.
-    - Enqueues exactly ONE job per run and waits for THAT job to finish.
+    End-to-end integration test that validates:
+      - azure_storage is working (account_add, account_user_add, blob_list, blob_put).
+      - jobq.enqueue() can insert a job row.
+      - jobq.run_next_job() can execute the job.
+      - result_blob_path is populated.
+      - The referenced blob actually exists in Azure Storage.
 
   Assumptions:
-    - Core jobq scripts have been applied:
-        00_admin_bootstrap.sql
-        10_jobq_types_and_table.sql
-        11_jobq_enqueue_and_cancel.sql
-        12_jobq_worker_core.sql
-        13_jobq_monitoring.sql
-        14_jobq_maintenance.sql
-        20_security_and_cron.sql
-    - The caller can SET ROLE jobq_worker (server admin is a member).
-    - azure_storage.account_add() and account_user_add('jobq_worker')
-      have already been run for :'storage_account'.
+    - 40_preflight.sql has already been run successfully:
+        * azure_storage extension exists.
+        * jobq schema, jobq.jobs table, jobq.job_status type, and key functions.
+    - The caller is a privileged admin that can:
+        * call azure_storage.account_add/account_user_add
+        * SET ROLE jobq_worker
+    - The following psql variables are provided by test.sh:
+        :storage_account
+        :storage_key
+        :storage_container
 */
 
 ------------------------------
--- 1. Enqueue exactly ONE test job as jobq_worker
---    (we call jobq.enqueue() from a tiny helper that returns job_id)
+-- 1. Register storage account & grant jobq_worker access
 ------------------------------
+
+-- Add or update account reference with provided key.
+SELECT azure_storage.account_add(:'storage_account', :'storage_key') AS account_add_result;
+
+-- Grant jobq_worker access to this storage account reference (idempotent).
+SELECT azure_storage.account_user_add(:'storage_account', 'jobq_worker') AS account_user_add_result;
+
+-- Show the account entry for sanity.
+SELECT *
+FROM azure_storage.account_list()
+WHERE account_name = :'storage_account';
+
+------------------------------
+-- 2. Connectivity test: list blobs in the target container
+------------------------------
+
+SELECT COUNT(*) AS existing_blobs
+FROM azure_storage.blob_list(:'storage_account', :'storage_container');
+
+------------------------------
+-- 3. Write a small test blob via azure_storage.blob_put()
+------------------------------
+
+WITH test_rows AS (
+  SELECT 1 AS id, 'jobq-test-ok'::text AS payload
+)
+SELECT azure_storage.blob_put(
+         :'storage_account',
+         :'storage_container',
+         'jobq_test_' || to_char(clock_timestamp(), 'YYYYMMDDHH24MISS') || '.csv',
+         test_rows
+       ) AS blob_put_result
+FROM test_rows;
+
+-- Show the most recent jobq_test_* blobs we can see.
+SELECT path,
+       last_modified
+FROM azure_storage.blob_list(:'storage_account', :'storage_container')
+WHERE path LIKE 'jobq_test_%'
+ORDER BY last_modified DESC
+LIMIT 5;
+
+------------------------------
+-- 4. jobq enqueue + run_next_job() + blob existence sanity check
+------------------------------
+
+/*
+  This is effectively the logic that used to live in 44_enqueue_job.sql,
+  inlined here so the test suite is a single cohesive script.
+*/
 
 SET ROLE jobq_worker;
 
+-- Helper to enqueue a single high-priority test job.
 CREATE OR REPLACE FUNCTION jobq._enqueue_test_job(
   p_storage_account   TEXT,
   p_storage_container TEXT
@@ -55,7 +104,7 @@ BEGIN
 END;
 $$;
 
--- Enqueue the job and capture its job_id into a psql variable
+-- Enqueue the job and capture its job_id into a psql variable.
 SELECT jobq._enqueue_test_job(
          :'storage_account',
          :'storage_container'
@@ -64,17 +113,10 @@ SELECT jobq._enqueue_test_job(
 
 DROP FUNCTION jobq._enqueue_test_job(TEXT, TEXT);
 
-------------------------------
--- 2. Run one job via the worker wrapper (top-level CALL)
-------------------------------
-
+-- Run one job via the worker wrapper (top-level CALL).
 CALL jobq.run_next_job();
 
-------------------------------
--- 3. Helper: wait for THIS job to reach a terminal status
---    (succeeded / failed / cancelled), up to a timeout.
-------------------------------
-
+-- Helper: wait for THIS job to reach a terminal status.
 CREATE OR REPLACE FUNCTION jobq._wait_for_job_terminal_state(
   p_job_id   BIGINT,
   p_timeout  INTERVAL DEFAULT interval '60 seconds'
@@ -120,10 +162,7 @@ SELECT jobq._wait_for_job_terminal_state(
   interval '60 seconds'
 );
 
-------------------------------
--- 4. Assert the job succeeded and the output blob exists
-------------------------------
-
+-- Assert the job succeeded and the output blob exists.
 CREATE OR REPLACE FUNCTION jobq._assert_job_completed_and_blob_exists(
   p_job_id           BIGINT,
   p_expected_account TEXT,
@@ -208,10 +247,7 @@ DROP FUNCTION jobq._wait_for_job_terminal_state(BIGINT, INTERVAL);
 
 RESET ROLE;
 
-------------------------------
--- 5. Optional: surface the test job for human inspection
-------------------------------
-
+-- Optional surfacing of the test job for human inspection.
 SELECT job_id,
        status,
        storage_account,
@@ -222,3 +258,4 @@ SELECT job_id,
        finished_at
 FROM jobq.jobs
 WHERE job_id = :test_job_id;
+

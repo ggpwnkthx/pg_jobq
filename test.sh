@@ -12,17 +12,26 @@ set -euo pipefail
 # Behavior:
 #   - Detects local psql vs Docker (postgres:18), similar to install.sh.
 #   - Runs a series of SQL checks against the target database:
-#       * Verifies azure_storage extension and jobq schema/objects exist.
-#       * Registers the given storage account + key (azure_storage.account_add).
-#       * Grants jobq_worker access to that account (account_user_add).
-#       * Lists blobs in the given container (blob_list).
-#       * Writes a tiny test blob (blob_put) and re-lists blobs.
-#       * Enqueues a trivial job via jobq.enqueue(), runs the worker once
-#         via jobq.run_next_job(), and asserts:
-#           - the job finishes with status=succeeded
-#           - result_blob_path is populated
-#           - the corresponding blob exists in Azure Storage.
-#       * Optionally checks jobq metrics views/functions.
+#       * 40_preflight.sql:
+#           - Verifies azure_storage extension exists.
+#           - Verifies jobq schema, jobq.jobs table, jobq.job_status type.
+#           - Verifies key functions (enqueue, run_next_job) exist.
+#       * 41_storage_and_jobq_integration.sql:
+#           - Registers the given storage account + key (account_add).
+#           - Grants jobq_worker access to that account (account_user_add).
+#           - Lists blobs in the given container (blob_list).
+#           - Writes a tiny test blob (blob_put) and re-lists blobs.
+#           - Enqueues a trivial job via jobq.enqueue().
+#           - Runs the worker once via jobq.run_next_job().
+#           - Waits for that specific job to reach a terminal state.
+#           - Asserts:
+#               - the job finishes with status=succeeded
+#               - result_blob_path is populated
+#               - the corresponding blob exists in Azure Storage.
+#       * 45_metrics.sql (optional):
+#           - Attempts to query jobq.v_queue_overview and jobq.get_queue_metrics().
+#           - If the current user lacks permissions, this step logs a warning
+#             but does not fail the test script.
 #
 # Requirements:
 #   - Either:
@@ -32,14 +41,12 @@ set -euo pipefail
 #     login on Azure Flexible Server, so it can:
 #       * use azure_storage_admin capabilities (account_add/account_user_add)
 #       * see extensions and schemas
+#       * SET ROLE jobq_worker
 #
 # NOTE:
 #   - The script never prints the storage account key.
 #   - The test blob is created with a "jobq_test_YYYYMMDDHH24MISS.csv" name
 #     under the specified container.
-#   - The enqueue/export test assumes the caller can SET ROLE jobq_client
-#     and jobq_worker (which is true for the server admin login that created
-#     the jobq roles on Azure Flexible Server).
 ###############################################################################
 
 DB_HOST=""
@@ -168,11 +175,8 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 SQL_TEST_FILES=(
   "40_preflight.sql"
-  "41_register_storage.sql"
-  "42_blob_list.sql"
-  "43_blob_put.sql"
-  "44_enqueue_job.sql"
-  "45_metrics.sql"
+  "41_storage_and_jobq_integration.sql"
+  "42_metrics.sql"
 )
 
 # Sanity-check that all expected SQL files exist
@@ -254,55 +258,26 @@ run_sql_file() {
 ###############################################################################
 # 1. Preflight: check jobq + azure_storage objects exist
 ###############################################################################
-echo ">>> [1/6] Preflight: checking azure_storage extension and jobq core objects..."
+echo ">>> [1/3] Preflight: checking azure_storage extension and jobq core objects..."
 run_sql_file "40_preflight.sql"
 echo "<<< Preflight OK."
 echo
 
 ###############################################################################
-# 2. Register storage account & grant jobq_worker access
+# 2. Combined azure_storage + jobq integration test
 ###############################################################################
-echo ">>> [2/6] azure_storage.account_add() and account_user_add(jobq_worker)..."
-run_sql_file "41_register_storage.sql" \
+echo ">>> [2/3] azure_storage + jobq integration test (account_add, blob_list, blob_put, enqueue + run + blob verify)..."
+run_sql_file "41_storage_and_jobq_integration.sql" \
   -v storage_account="$STORAGE_ACCOUNT" \
-  -v storage_key="$STORAGE_KEY"
-echo "<<< Storage account registered and jobq_worker granted access."
-echo
-
-###############################################################################
-# 3. Connectivity test: list blobs in the container
-###############################################################################
-echo ">>> [3/6] Testing connectivity with azure_storage.blob_list()..."
-run_sql_file "42_blob_list.sql" \
-  -v storage_account="$STORAGE_ACCOUNT" \
+  -v storage_key="$STORAGE_KEY" \
   -v storage_container="$STORAGE_CONTAINER"
-echo "<<< blob_list() call succeeded (container reachable)."
+echo "<<< Integration test completed (storage and jobq end-to-end path verified)."
 echo
 
 ###############################################################################
-# 4. Write a small test blob via azure_storage.blob_put()
+# 3. Final jobq sanity check: simple metrics query (if permitted)
 ###############################################################################
-echo ">>> [4/6] Writing a small test blob via azure_storage.blob_put()..."
-run_sql_file "43_blob_put.sql" \
-  -v storage_account="$STORAGE_ACCOUNT" \
-  -v storage_container="$STORAGE_CONTAINER"
-echo "<<< blob_put() test completed (test blob created & listed)."
-echo
-
-###############################################################################
-# 5. jobq enqueue + run_next_job() + blob existence sanity check
-###############################################################################
-echo ">>> [5/6] jobq.enqueue()/run_next_job() end-to-end export test..."
-run_sql_file "44_enqueue_job.sql" \
-  -v storage_account="$STORAGE_ACCOUNT" \
-  -v storage_container="$STORAGE_CONTAINER"
-echo "<<< jobq.enqueue()/run_next_job() test completed (job row created, succeeded, and blob verified)."
-echo
-
-###############################################################################
-# 6. Final jobq sanity check: simple metrics query (if permitted)
-###############################################################################
-echo ">>> [6/6] Optional: jobq metrics surface check (if permissions allow)..."
+echo ">>> [3/3] Optional: jobq metrics surface check (if permissions allow)..."
 
 # This may fail if the current user does not have SELECT/EXECUTE on the
 # metrics views/functions. That's OK; we treat it as a soft warning.
@@ -320,8 +295,9 @@ fi
 
 echo
 echo "=== All core tests completed. ==="
-echo "If no errors were reported above, jobq + azure_storage + the provided"
-echo "storage account/container are wired up and reachable from this database,"
-echo "and end-to-end exports via jobq.run_next_job() -> azure_storage.blob_put()"
-echo "are working (including verification that the output blob exists)."
+echo "If no errors were reported above (other than the optional metrics warning),"
+echo "jobq + azure_storage + the provided storage account/container are wired up"
+echo "and reachable from this database, and end-to-end exports via"
+echo "jobq.run_next_job() -> azure_storage.blob_put() are working."
 echo
+
