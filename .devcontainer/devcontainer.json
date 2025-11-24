@@ -1,0 +1,50 @@
+{
+  "name": "pg_jobq",
+  // Base Ubuntu devcontainer with VS Code user, sudo, etc.
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+
+  // Default SSL mode so psql behaves nicely with Azure PG
+  "containerEnv": {
+    "PGSSLMODE": "require"
+  },
+
+  // Install psql client and make the helper scripts executable
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y postgresql-client && chmod +x install.sh test.sh",
+
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "editor.formatOnSave": true,
+        "[sql]": {
+          "editor.defaultFormatter": "mtxr.sqltools"
+        },
+        "[shellscript]": {
+          "editor.defaultFormatter": "foxundermoon.shell-format"
+        },
+        "files.associations": {
+          "*.mmd": "markdown" // so Mermaid diagrams get nice handling
+        }
+      },
+      "extensions": [
+        // SQL / Postgres
+        "mtxr.sqltools",
+        "mtxr.sqltools-driver-pg",
+
+        // Shell / Bash
+        "foxundermoon.shell-format",
+        "mads-hartmann.bash-ide-vscode",
+
+        // Mermaid / diagrams
+        "bierner.markdown-mermaid",
+
+        // Nice-to-have infra tooling
+        "ms-azuretools.vscode-docker",
+        "GitHub.vscode-pull-request-github"
+      ]
+    }
+  },
+
+  // Standard non-root user in devcontainers
+  "remoteUser": "vscode"
+}
