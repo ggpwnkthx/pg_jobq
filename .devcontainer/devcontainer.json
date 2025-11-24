@@ -27,20 +27,14 @@
         }
       },
       "extensions": [
-        // SQL / Postgres
         "mtxr.sqltools",
         "mtxr.sqltools-driver-pg",
-
-        // Shell / Bash
         "foxundermoon.shell-format",
         "mads-hartmann.bash-ide-vscode",
-
-        // Mermaid / diagrams
         "bierner.markdown-mermaid",
-
-        // Nice-to-have infra tooling
         "ms-azuretools.vscode-docker",
-        "GitHub.vscode-pull-request-github"
+        "GitHub.vscode-pull-request-github",
+        "AndyGeek.context-code"
       ]
     }
   },
