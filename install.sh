@@ -84,6 +84,7 @@ SCRIPTS=(
   "13_jobq_monitoring.sql"
   "14_jobq_maintenance.sql"
   "20_security_and_cron.sql"
+  "30_production_hardening_and_version.sql"
 )
 
 usage() {
@@ -301,3 +302,4 @@ for sql_file in "${SCRIPTS[@]}"; do
 done
 
 echo "=== Jobq install completed successfully against database: $TARGET_DB ==="
+
