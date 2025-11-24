@@ -1,0 +1,180 @@
+/*
+  =====================================================================
+  30_jobq_examples.sql – Operational examples & handy queries
+
+  This file is intentionally non-invasive:
+    - All statements are commented out.
+    - It acts as a runbook / scratchpad for operators and developers.
+
+  Assumptions (for the current database):
+    - 00_admin_bootstrap.sql
+    - 10_jobq_types_and_table.sql
+    - 11_jobq_enqueue_and_cancel.sql
+    - 12_jobq_worker_core.sql
+    - 13_jobq_monitoring.sql
+    - 14_jobq_maintenance.sql
+    - 20_security_and_cron.sql
+  Notes:
+    - jobq can be installed in multiple databases; each database has its
+      own jobq.jobs queue and executes queries in its own context.
+    - pg_cron is installed in exactly one database per server. In that
+      database, 20_security_and_cron.sql creates jobq.install_cron_jobs(),
+      which can schedule worker loops into any jobq-enabled database.
+  =====================================================================
+*/
+
+------------------------------
+-- A. Azure storage plumbing
+------------------------------
+
+-- Register a storage account in azure_storage (run as admin / appropriate role):
+--   SELECT azure_storage.account_add('accountname', 'accountkey==');
+
+-- Grant jobq_worker access to the storage account:
+--   SELECT azure_storage.account_user_add('accountname', 'jobq_worker');
+
+-- NOTE:
+--   - The storage_account value passed to jobq.enqueue() must match the
+--     logical account name registered via account_add().
+--   - Each database that executes jobs must have the azure_storage
+--     extension installed and configured.
+
+
+------------------------------
+-- B. Cron wiring / unwiring
+------------------------------
+
+-- In the database where pg_cron is installed **and** jobq is installed,
+-- wire cron jobs (from an azure_pg_admin-backed login), targeting the
+-- current database:
+--
+--   SELECT jobq.install_cron_jobs();
+--
+-- Or schedule workers into a different database that contains the jobq
+-- schema and functions (and its own queue):
+--
+--   SELECT jobq.install_cron_jobs('reporting');
+--
+-- In the example above:
+--   - pg_cron and jobq are installed in the "cron home" database where
+--     you execute jobq.install_cron_jobs().
+--   - jobq is also installed in the "reporting" database, and workers
+--     will run there and operate on reporting.jobq.jobs.
+
+-- Inspect scheduled jobs (run in the pg_cron home database):
+--   SELECT * FROM cron.job ORDER BY jobid;
+
+-- Unschedule if needed (use jobid, consistent with jobq.install_cron_jobs()):
+--   SELECT cron.unschedule(jobid)
+--   FROM cron.job
+--   WHERE jobname = 'jobq-runner';
+--
+--   SELECT cron.unschedule(jobid)
+--   FROM cron.job
+--   WHERE jobname = 'jobq-requeue-orphans';
+--
+--   SELECT cron.unschedule(jobid)
+--   FROM cron.job
+--   WHERE jobname = 'jobq-purge-old';
+
+
+------------------------------
+-- C. Monitoring & troubleshooting
+------------------------------
+
+-- All of these queries run against the jobq schema in the *current*
+-- database, so each database exposes its own queue metrics.
+
+-- High-level health snapshot (single-row aggregate view):
+--   SELECT * FROM jobq.v_queue_overview;
+
+-- Compact metrics row via the queue_metrics composite type:
+--   SELECT * FROM jobq.get_queue_metrics();
+
+-- Running jobs with pg_stat_activity details:
+--   SELECT * FROM jobq.v_running_jobs;
+
+-- Stalled jobs (elapsed > max_runtime, fallback 30 minutes if NULL):
+--   SELECT * FROM jobq.v_stalled_jobs;
+
+-- Recent failures (last 50):
+--   SELECT *
+--   FROM jobq.v_recent_jobs
+--   WHERE status = 'failed'
+--   ORDER BY finished_at DESC NULLS LAST
+--   LIMIT 50;
+
+
+------------------------------
+-- D. Typical lifecycle: enqueue, run, inspect
+------------------------------
+
+-- 1) Enqueue a one-off export job to Azure Blob Storage.
+--    Assumes:
+--      - Your app/service role is a member of jobq_client in THIS DB.
+--      - Storage account & container are already configured in azure_storage
+--        in THIS DB.
+--      - Query is read-only (SELECT/WITH only; no semicolons, comments,
+--        INTO, or DML/DDL keywords, per jobq.enqueue() validation).
+--
+--   SET ROLE jobq_client;
+--
+--   SELECT jobq.enqueue(
+--     p_query_sql         => $q$
+--       SELECT
+--         g AS row_id,
+--         clock_timestamp() + (g || ' seconds')::interval AS event_ts,
+--         (random() * 1000000)::bigint AS metric_a,
+--         (random() * 1000000)::bigint AS metric_b,
+--         md5(g::text || ':' || random()::text) AS payload
+--       FROM generate_series(1, 2000000) AS g
+--       ORDER BY md5(g::text)
+--     $q$,
+--     p_storage_account   => 'esquiregeneral',          -- azure_storage account name
+--     p_storage_container => 'test',                    -- target container
+--     p_scheduled_at      => now(),                     -- run as soon as a worker sees it
+--     p_priority          => 0,                         -- higher number = higher priority
+--     p_correlation_id    => 'daily_reporting_export',
+--     p_max_runtime       => interval '30 minutes'      -- per-job timeout (clamped [1s, 24h])
+--   ) AS job_id;
+
+-- 2) If pg_cron has not yet been wired up for THIS database, run the
+--    worker manually in this database:
+--
+--   SET ROLE jobq_worker;
+--
+--   -- IMPORTANT: CALL jobq.run_next_job() must be executed as a
+--   -- top-level call (not inside an explicit BEGIN/COMMIT block),
+--   -- because the procedure owns its own COMMITs.
+--   CALL jobq.run_next_job();
+
+-- 3) Inspect the outcome of the job you just started:
+--
+--   SELECT *
+--   FROM jobq.v_recent_jobs
+--   WHERE correlation_id = 'daily_reporting_export'
+--   ORDER BY job_id DESC
+--   LIMIT 10;
+
+
+------------------------------
+-- E. Operational APIs – cancel, kill, requeue, purge
+------------------------------
+
+-- All of these operate on the queue in the current database.
+
+-- Soft-cancel a pending job (client-facing, pending only):
+--   SET ROLE jobq_client;
+--   SELECT jobq.cancel(12345);  -- returns TRUE if a pending job was cancelled
+
+-- Hard kill a running job (ops-only; best-effort PG backend terminate):
+--   SET ROLE jobq_ops;
+--   SELECT jobq.kill(12345);    -- TRUE if pg_terminate_backend() was called
+
+-- Requeue orphaned running jobs (status = 'running' but no active backend):
+--   SET ROLE jobq_ops;
+--   SELECT jobq.requeue_orphaned_running_jobs(100);
+
+-- Purge finished jobs older than 30 days, up to 50k rows:
+--   SET ROLE jobq_ops;
+--   SELECT jobq.purge_old_jobs('30 days', 50000);

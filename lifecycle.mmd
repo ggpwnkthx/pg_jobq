@@ -1,0 +1,101 @@
+---
+config:
+  layout: elk
+  theme: neutral
+  look: neo
+---
+flowchart TB
+ subgraph S1["Worker loop and cron integration"]
+        Cron@{ label: "pg_cron job 'jobq-runner' (in cron home database)" }
+        RunNext@{ label: "Procedure 'jobq.run_next_job()' (SECURITY INVOKER)" }
+        Claim@{ label: "Function 'jobq.claim_next_job()'" }
+        NoJob["No job claimed or no capacity"]
+        CommitNoJob["COMMIT and exit"]
+        RunTx2@{ label: "COMMIT (job row now visible as status = 'running')" }
+  end
+ subgraph S2["Per-job execution"]
+        Runner@{ label: "Procedure 'jobq.runner(p_job_id, p_slot_id)'" }
+        LockRow@{ label: "Row locked with 'SELECT ... FOR UPDATE' (status = 'running')" }
+        Timeout@{ label: "Set per-job 'statement_timeout' from 'max_runtime'" }
+        Exec@{ label: "Function 'jobq.exec_readonly_to_blob(...)'" }
+        Blob@{ label: "Azure Blob Storage (Parquet export via 'azure_storage.blob_put()')" }
+        Success@{ label: "UPDATE job row: status = 'succeeded', set 'result_blob_path', clear 'backend_pid'" }
+        FailFinal@{ label: "UPDATE job row: status = 'failed', record 'last_error', clear 'backend_pid'" }
+        Requeue@{ label: "UPDATE job row: status = 'pending', bump 'attempt_count', schedule with backoff, clear 'backend_pid'" }
+        ReleaseSlot@{ label: "Release advisory lock slot '(42, slot_id)'" }
+  end
+ subgraph S3["Operations and maintenance"]
+        Ops@{ label: "Ops user (role 'jobq_ops')" }
+        KillFn@{ label: "Function 'jobq.kill(job_id)'" }
+        OrphanFn@{ label: "Function 'jobq.requeue_orphaned_running_jobs(p_limit)'" }
+        PurgeFn@{ label: "Function 'jobq.purge_old_jobs(p_older_than, p_limit)'" }
+        Cancelled@{ label: "Job lifecycle end state: status = 'cancelled'" }
+        Deleted["Job row deleted (beyond retention window)"]
+  end
+ subgraph S4["Monitoring and reporting"]
+        Reporting@{ label: "Reporting user (role 'jobq_reporting')" }
+        Views@{ label: "Views 'jobq.v_queue_overview', 'jobq.v_running_jobs', 'jobq.v_recent_jobs', 'jobq.v_stalled_jobs'" }
+        MetricsFn@{ label: "Function 'jobq.get_queue_metrics()'" }
+        C@{ label: "Table 'jobq.jobs' (rows with status = 'pending')" }
+  end
+    A@{ label: "App / Service (role 'jobq_client')" } -- "CALL 'jobq.enqueue(...)'" --> B@{ label: "Function 'jobq.enqueue()' (SECURITY DEFINER as 'jobq_worker')" }
+    B -- "INSERT job row (status = 'pending')" --> C
+    Cron -- "Schedules 'CALL jobq.run_next_job()'" --> RunNext
+    RunNext -- "SELECT 'jobq.claim_next_job()'" --> Claim
+    Claim -- Return NULL job_id (no job / capacity) --> NoJob
+    NoJob -- Finish worker loop --> CommitNoJob
+    Claim -- Return (job_id, slot_id) --> RunTx2
+    C -- "Eligible 'pending' row chosen by 'jobq.claim_next_job()'" --> Claim
+    RunTx2 -- "CALL 'jobq.runner(job_id, slot_id)'" --> Runner
+    Runner -- "Re-fetch job row" --> LockRow
+    Runner -- "Set per-job timeout" --> Timeout
+    Timeout -- Execute validated query and stream rows --> Exec
+    Exec -- "SELECT 'azure_storage.blob_put(...)' on query result" --> Blob
+    Blob -- Export succeeds --> Success
+    Success -- Release parallelism slot --> ReleaseSlot
+    Exec -- Error or timeout during export --> Runner
+    Runner -- Attempts &lt; max_attempts (compute backoff) --> Requeue
+    Runner -- "Attempts >= max_attempts (no more retries)" --> FailFinal
+    Requeue -- Release parallelism slot --> ReleaseSlot
+    FailFinal -- Release parallelism slot --> ReleaseSlot
+    C -- Claimed and marked 'running' --> LockRow
+    Success --> Succeeded@{ label: "Job lifecycle end state: status = 'succeeded'" }
+    FailFinal --> Failed@{ label: "Job lifecycle end state: status = 'failed'" }
+    Requeue -- Back to queue as 'pending' for retry --> C
+    Ops -- "CALL 'jobq.kill(job_id)'" --> KillFn
+    KillFn -- "Best-effort 'pg_terminate_backend(pid)' and UPDATE status = 'cancelled'" --> Cancelled
+    Ops -- "SELECT 'jobq.requeue_orphaned_running_jobs(...)'" --> OrphanFn
+    OrphanFn -- Orphaned running job requeued as 'pending' --> Requeue
+    OrphanFn -- Orphaned running job exceeded max_attempts and marked 'failed' --> FailFinal
+    Ops -- "SELECT 'jobq.purge_old_jobs(...)'" --> PurgeFn
+    PurgeFn -- DELETE old finished jobs (statuses 'succeeded' / 'failed' / 'cancelled') --> Deleted
+    Reporting -- SELECT from monitoring views --> Views
+    Reporting -- "SELECT * FROM 'jobq.get_queue_metrics()'" --> MetricsFn
+    Views -- "Read from 'jobq.jobs' and 'pg_stat_activity'" --> C
+
+    A@{ shape: rect}
+    B@{ shape: rect}
+    C@{ shape: rect}
+    Cron@{ shape: rect}
+    RunNext@{ shape: rect}
+    Claim@{ shape: rect}
+    RunTx2@{ shape: rect}
+    Runner@{ shape: rect}
+    LockRow@{ shape: rect}
+    Timeout@{ shape: rect}
+    Exec@{ shape: rect}
+    Blob@{ shape: rect}
+    Success@{ shape: rect}
+    FailFinal@{ shape: rect}
+    Requeue@{ shape: rect}
+    ReleaseSlot@{ shape: rect}
+    Succeeded@{ shape: rect}
+    Failed@{ shape: rect}
+    Ops@{ shape: rect}
+    KillFn@{ shape: rect}
+    OrphanFn@{ shape: rect}
+    PurgeFn@{ shape: rect}
+    Cancelled@{ shape: rect}
+    Reporting@{ shape: rect}
+    Views@{ shape: rect}
+    MetricsFn@{ shape: rect}

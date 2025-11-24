@@ -1,0 +1,90 @@
+---
+config:
+  layout: elk
+  theme: neutral
+---
+flowchart TB
+ subgraph D1["Database 'cron_home_db' (with 'pg_cron')"]
+        CRON@{ label: "Extension 'pg_cron'" }
+        F1@{ label: "Function 'jobq.install_cron_jobs(target_db)'" }
+  end
+ subgraph J2D["'jobq' schema objects"]
+        T@{ label: "Table 'jobq.jobs'" }
+        FE@{ label: "Function 'jobq.enqueue'" }
+        FC@{ label: "Function 'jobq.cancel'" }
+        FEX@{ label: "Function 'jobq.exec_readonly_to_blob'" }
+        FCN@{ label: "Function 'jobq.claim_next_job'" }
+        PR@{ label: "Procedure 'jobq.runner'" }
+        PRN@{ label: "Procedure 'jobq.run_next_job'" }
+        FM1@{ label: "Function 'jobq.kill'" }
+        FM2@{ label: "Function 'jobq.requeue_orphaned_running_jobs'" }
+        FM3@{ label: "Function 'jobq.purge_old_jobs'" }
+        V1@{ label: "View 'jobq.v_queue_overview'" }
+        V2@{ label: "View 'jobq.v_running_jobs'" }
+        V3@{ label: "View 'jobq.v_recent_jobs'" }
+        V4@{ label: "View 'jobq.v_stalled_jobs'" }
+        FM4@{ label: "Function 'jobq.get_queue_metrics'" }
+  end
+ subgraph D2["Database 'app_db' (jobq enabled)"]
+        AZ1@{ label: "Extension 'azure_storage'" }
+        J2@{ label: "Schema 'jobq'" }
+        J2D
+  end
+ subgraph S["Azure Database for PostgreSQL - Flexible Server"]
+        D1
+        D2
+  end
+ subgraph ST["Azure Storage Account"]
+        C1@{ label: "Blob container 'storage_container'" }
+  end
+    A@{ label: "Application / Service (role 'jobq_client')" } -- "enqueue job via 'jobq.enqueue'" --> FE
+    FE -- "insert row into 'jobq.jobs'" --> T
+    A -- "cancel pending job via 'jobq.cancel'" --> FC
+    FC -- update status to 'cancelled' --> T
+    B@{ label: "BI / Reporting (role 'jobq_reporting')" } -- read metrics from overview view --> V1
+    B -- inspect running jobs view --> V2
+    B -- inspect recent jobs view --> V3
+    B -- inspect stalled jobs view --> V4
+    B -- "fetch metrics via 'jobq.get_queue_metrics'" --> FM4
+    C@{ label: "Ops / SRE (role 'jobq_ops')" } -- "kill running job via 'jobq.kill'" --> FM1
+    C -- "requeue orphans via 'jobq.requeue_orphaned_running_jobs'" --> FM2
+    C -- "purge old jobs via 'jobq.purge_old_jobs'" --> FM3
+    FM1 -- "mark job cancelled in 'jobq.jobs'" --> T
+    FM2 -- "requeue or fail orphaned rows in 'jobq.jobs'" --> T
+    FM3 -- "delete old finished rows from 'jobq.jobs'" --> T
+    CRON -- run scheduled tasks --> F1
+    F1 -- "create cron job 'jobq-runner'" --> PRN
+    F1 -- "create cron job 'jobq-requeue-orphans'" --> FM2
+    F1 -- "create cron job 'jobq-purge-old'" --> FM3
+    PRN -- "claim next job via 'jobq.claim_next_job'" --> FCN
+    FCN -- "select pending job from 'jobq.jobs'" --> T
+    FCN -- mark job as 'running' --> T
+    PRN -- "execute job via 'jobq.runner'" --> PR
+    PR -- "export result set via 'jobq.exec_readonly_to_blob'" --> FEX
+    FEX -- "call 'azure_storage.blob_put'" --> AZ1
+    AZ1 -- write Parquet blob to container --> C1
+    PR -- "update status, times, and blob path in 'jobq.jobs'" --> T
+
+    A@{ shape: rect}
+    B@{ shape: rect}
+    C@{ shape: rect}
+    CRON@{ shape: rect}
+    F1@{ shape: rect}
+    AZ1@{ shape: rect}
+    J2@{ shape: rect}
+    T@{ shape: rect}
+    FE@{ shape: rect}
+    FC@{ shape: rect}
+    FEX@{ shape: rect}
+    FCN@{ shape: rect}
+    PR@{ shape: rect}
+    PRN@{ shape: rect}
+    FM1@{ shape: rect}
+    FM2@{ shape: rect}
+    FM3@{ shape: rect}
+    V1@{ shape: rect}
+    V2@{ shape: rect}
+    V3@{ shape: rect}
+    V4@{ shape: rect}
+    FM4@{ shape: rect}
+    C1@{ shape: rect}
