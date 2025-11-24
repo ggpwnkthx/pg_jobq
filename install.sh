@@ -302,4 +302,3 @@ for sql_file in "${SCRIPTS[@]}"; do
 done
 
 echo "=== Jobq install completed successfully against database: $TARGET_DB ==="
-

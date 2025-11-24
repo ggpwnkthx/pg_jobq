@@ -23,12 +23,12 @@ set -euo pipefail
 #           - Writes a tiny test blob (blob_put) and re-lists blobs.
 #           - Enqueues a trivial job via jobq.enqueue().
 #           - Runs the worker once via jobq.run_next_job().
-#           - Waits for that specific job to reach a terminal state.
+#           - Waits for that specific job to reach a terminal status.
 #           - Asserts:
 #               - the job finishes with status=succeeded
 #               - result_blob_path is populated
 #               - the corresponding blob exists in Azure Storage.
-#       * 45_metrics.sql (optional):
+#       * 42_metrics.sql (optional):
 #           - Attempts to query jobq.v_queue_overview and jobq.get_queue_metrics().
 #           - If the current user lacks permissions, this step logs a warning
 #             but does not fail the test script.
@@ -222,8 +222,12 @@ echo
 run_psql() {
   # Args after this function name are passed directly to psql
   if [[ "$RUN_MODE" == "local" ]]; then
-    PGPASSWORD="$DB_PASSWORD" PGSSLMODE="$SSL_MODE" \
+    PGPASSWORD="$DB_PASSWORD" \
+    PGSSLMODE="$SSL_MODE" \
+    PAGER=cat \
+    PSQL_PAGER=cat \
       psql \
+        -X \
         -h "$DB_HOST" \
         -p "$DB_PORT" \
         -U "$DB_USER" \
@@ -232,9 +236,12 @@ run_psql() {
     docker run --rm \
       -e PGPASSWORD="$DB_PASSWORD" \
       -e PGSSLMODE="$SSL_MODE" \
+      -e PAGER=cat \
+      -e PSQL_PAGER=cat \
       -v "$SCRIPT_DIR":"$SCRIPT_DIR" \
       "$DOCKER_IMAGE" \
       psql \
+        -X \
         -h "$DB_HOST" \
         -p "$DB_PORT" \
         -U "$DB_USER" \
@@ -284,7 +291,7 @@ echo ">>> [3/3] Optional: jobq metrics surface check (if permissions allow)..."
 if run_psql \
      -d "$DB_NAME" \
      -v ON_ERROR_STOP=1 \
-     -f "$SCRIPT_DIR/45_metrics.sql" \
+     -f "$SCRIPT_DIR/42_metrics.sql" \
      >/dev/null 2>&1; then
   echo "<<< jobq metrics queries succeeded."
 else
@@ -300,4 +307,3 @@ echo "jobq + azure_storage + the provided storage account/container are wired up
 echo "and reachable from this database, and end-to-end exports via"
 echo "jobq.run_next_job() -> azure_storage.blob_put() are working."
 echo
-

@@ -177,27 +177,25 @@ The test runner will:
 1. Run `40_preflight.sql`:
    - Check `azure_storage` extension exists.
    - Check `jobq` schema, `jobq.jobs` table, `jobq.job_status` type, and key functions.
-
-2. Register your storage account and grant `jobq_worker` access (`41_register_storage.sql`):
-   - `azure_storage.account_add(<name>, <key>)`
-   - `azure_storage.account_user_add(<name>, 'jobq_worker')`
-
-3. Verify container connectivity (`42_blob_list.sql`).
-
-4. Write a small test blob with `blob_put` and re‑list blobs (`43_blob_put.sql`).
-
-5. Run a full enqueue → worker → blob verification test (`44_enqueue_job.sql`):
-   - Calls `jobq.enqueue('SELECT 1 AS jobq_test_value', ...)`
-   - Runs `CALL jobq.run_next_job()`
-   - Waits for the job to hit a terminal status (`succeeded` / `failed` / `cancelled`)
-   - Asserts:
+2. Run `41_storage_and_jobq_integration.sql`:
+   - Register the storage account and key:
+     - `azure_storage.account_add(<name>, <key>)`
+   - Grant `jobq_worker` access to that account:
+     - `azure_storage.account_user_add(<name>, 'jobq_worker')`
+   - Verify container connectivity with `azure_storage.blob_list()`.
+   - Write a small test blob with `azure_storage.blob_put()` and re-list blobs.
+   - Enqueue a trivial job via `jobq.enqueue('SELECT 1 AS jobq_test_value', ...)`.
+   - Run the worker once via `CALL jobq.run_next_job()`.
+   - Wait for that specific job to reach a terminal status.
+   - Assert:
      - `status = 'succeeded'`
      - `result_blob_path` is populated
-     - The referenced blob exists in Azure Storage
+     - the referenced blob exists in Azure Storage.
+3. Run `42_metrics.sql` (best-effort):
+   - Attempt to query `jobq.v_queue_overview` and `jobq.get_queue_metrics()`.
+   - If the current user lacks permissions, this logs a warning but does not fail the test run.
 
-6. Optionally checks metrics surfaces (`45_metrics.sql`).
-
-If all steps succeed, you have a working end‑to‑end path from `jobq` to Azure Blob.
+If all steps succeed, you have a working end-to-end path from `jobq` to Azure Blob.
 
 ---
 
