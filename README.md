@@ -35,32 +35,6 @@ It is designed for **long‑running analytics / ETL exports** that you **do not*
 
 ---
 
-## Repository Layout
-
-```text
-.
-├── 00_admin_bootstrap.sql          # Roles, azure_storage extension, jobq schema
-├── 10_jobq_types_and_table.sql     # job_status enum, jobq.jobs, indexes, trigger
-├── 11_jobq_enqueue_and_cancel.sql  # jobq.enqueue, jobq.cancel, exec_readonly_to_blob
-├── 12_jobq_worker_core.sql         # claim_next_job, runner, run_next_job
-├── 13_jobq_monitoring.sql          # metrics type, views, get_queue_metrics
-├── 14_jobq_maintenance.sql         # kill, requeue_orphaned_running_jobs, purge_old_jobs
-├── 20_security_and_cron.sql        # ownership/privileges, pg_cron wiring helper
-├── 30_jobq_examples.sql            # commented runbook / examples
-├── 40_preflight.sql                # test: check core objects & extension exist
-├── 41_register_storage.sql         # test: account_add + account_user_add
-├── 42_blob_list.sql                # test: blob_list against container
-├── 43_blob_put.sql                 # test: blob_put small CSV
-├── 44_enqueue_job.sql              # test: enqueue+run_next_job+verify blob
-├── 45_metrics.sql                  # test: metrics / monitoring sanity
-├── architecture.mmd                # Mermaid: system architecture
-├── lifecycle.mmd                   # Mermaid: worker + job lifecycle
-├── install.sh                      # Installer for jobq SQL into a database
-└── test.sh                         # End‑to‑end connectivity & export tests
-```
-
----
-
 ## Requirements
 
 ### Postgres / Azure
@@ -422,9 +396,7 @@ You can override this by editing the cron job, or run purges manually if you pre
 
 ---
 
-## Mermaid Diagrams
-
-The repository includes Mermaid diagrams you can render in your docs tooling or CI:
+## Diagrams
 
 - `architecture.mmd` – high‑level topology: app / jobq / pg_cron / Azure Storage
 - `lifecycle.mmd` – worker & job lifecycle (enqueue → claim → run → succeed/fail/requeue/kill)
