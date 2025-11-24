@@ -147,8 +147,9 @@ END IF;
 IF v_sql_scan ~* E'\\yinto\\y' THEN RAISE EXCEPTION 'query_sql must not contain INTO';
 END IF;
 -- Additional hardening: disallow obvious mutating/DDL keywords
--- (outside literals).
-IF v_sql_scan ~* E'\\b(insert|update|delete|merge|truncate|create|alter|drop|grant|revoke|copy|vacuum|analyze|cluster|refresh|reindex|call|do|lock)\\b' THEN RAISE EXCEPTION 'query_sql must be a read-only SELECT/WITH (no DML/DDL keywords allowed)';
+-- (outside literals). Use word boundaries (\y) so we do not
+-- accidentally match column names like "created_at".
+IF v_sql_scan ~* E'\\y(insert|update|delete|merge|truncate|create|alter|drop|grant|revoke|copy|vacuum|analyze|cluster|refresh|reindex|call|do|lock)\\y' THEN RAISE EXCEPTION 'query_sql must be a read-only SELECT/WITH (no DML/DDL keywords allowed)';
 END IF;
 --------------------------------------------------------------------
 -- Persist the job
